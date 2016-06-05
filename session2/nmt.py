@@ -170,11 +170,10 @@ def prepare_data(seqs_x, seqs_y, maxlen=None, n_words_src=30000,
         new_lengths_x = []
         new_lengths_y = []
         for l_x, s_x, l_y, s_y in zip(lengths_x, seqs_x, lengths_y, seqs_y):
-            if l_x < maxlen and l_y < maxlen:
-                new_seqs_x.append(s_x)
-                new_lengths_x.append(l_x)
-                new_seqs_y.append(s_y)
-                new_lengths_y.append(l_y)
+            new_seqs_x.append(s_x[0:maxlen])
+            new_lengths_x.append(min(l_x, maxlen))
+            new_seqs_y.append(s_y[0:maxlen])
+            new_lengths_y.append(min(l_y, maxlen))                
         lengths_x = new_lengths_x
         seqs_x = new_seqs_x
         lengths_y = new_lengths_y
@@ -525,13 +524,38 @@ def init_params(options):
 
     # encoder: bidirectional RNN
     params = get_layer(options['encoder'])[0](options, params,
-                                              prefix='encoder',
+                                              prefix='encoder_1st',
                                               nin=options['dim_word'],
                                               dim=options['dim'])
     params = get_layer(options['encoder'])[0](options, params,
-                                              prefix='encoder_r',
+                                              prefix='encoder_2nd',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_3rd',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_4th',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_r_1st',
                                               nin=options['dim_word'],
                                               dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_r_2nd',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_r_3rd',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+    params = get_layer(options['encoder'])[0](options, params,
+                                              prefix='encoder_r_4th',
+                                              nin=options['dim'],
+                                              dim=options['dim'])
+
     ctxdim = 2 * options['dim']
 
     # init_state, init_cell
@@ -539,8 +563,23 @@ def init_params(options):
                                 nin=ctxdim, nout=options['dim'])
     # decoder
     params = get_layer(options['decoder'])[0](options, params,
-                                              prefix='decoder',
+                                              prefix='decoder_1st',
                                               nin=options['dim_word'],
+                                              dim=options['dim'],
+                                              dimctx=ctxdim)
+    params = get_layer(options['decoder'])[0](options, params,
+                                              prefix='decoder_2nd',
+                                              nin=options['dim'],
+                                              dim=options['dim'],
+                                              dimctx=ctxdim)
+    params = get_layer(options['decoder'])[0](options, params,
+                                              prefix='decoder_3rd',
+                                              nin=options['dim'],
+                                              dim=options['dim'],
+                                              dimctx=ctxdim)
+    params = get_layer(options['decoder'])[0](options, params,
+                                              prefix='decoder_4th',
+                                              nin=options['dim'],
                                               dim=options['dim'],
                                               dimctx=ctxdim)
     # readout
@@ -584,18 +623,43 @@ def build_model(tparams, options):
     # word embedding for forward rnn (source)
     emb = tparams['Wemb'][x.flatten()]
     emb = emb.reshape([n_timesteps, n_samples, options['dim_word']])
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder',
+    proj1 = get_layer(options['encoder'])[1](tparams, emb, options,
+                                            prefix='encoder_1st',
                                             mask=x_mask)
+    # second layer rnn will use the hidden states of the first layer
+    proj2 = get_layer(options['encoder'])[1](tparams, proj1[0], options,
+                                             prefix='encoder_2nd',
+                                             mask=x_mask)
+    # third layer rnn will use the hidden states of the second layer
+    proj3 = get_layer(options['encoder'])[1](tparams, proj2[0], options,
+                                             prefix='encoder_3rd',
+                                             mask=x_mask)
+    # forth layer rnn will use the hidden states of the third layer
+    proj4 = get_layer(options['encoder'])[1](tparams, proj3[0], options,
+                                             prefix='encoder_4th',
+                                             mask=x_mask)
+
     # word embedding for backward rnn (source)
     embr = tparams['Wemb'][xr.flatten()]
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r',
+    projr1 = get_layer(options['encoder'])[1](tparams, embr, options,
+                                             prefix='encoder_r_1st',
+                                             mask=xr_mask)
+    # second layer rnn will use the hidden states of the first layer
+    projr2 = get_layer(options['encoder'])[1](tparams, projr1[0], options,
+                                             prefix='encoder_r_2nd',
+                                             mask=xr_mask)
+    # third layer rnn will use the hidden states of the second layer
+    projr3 = get_layer(options['encoder'])[1](tparams, projr2[0], options,
+                                             prefix='encoder_r_3rd',
+                                             mask=xr_mask)
+    # forth layer rnn will use the hidden states of the third layer
+    projr4 = get_layer(options['encoder'])[1](tparams, projr3[0], options,
+                                             prefix='encoder_r_4th',
                                              mask=xr_mask)
 
     # context will be the concatenation of forward and backward rnns
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx = concatenate([proj4[0], projr4[0][::-1]], axis=proj4[0].ndim-1)
 
     # mean of the context (across time) will be used to initialize decoder rnn
     ctx_mean = (ctx * x_mask[:, :, None]).sum(0) / x_mask.sum(0)[:, None]
@@ -618,20 +682,39 @@ def build_model(tparams, options):
     emb = emb_shifted
 
     # decoder - pass through the decoder conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
-                                            prefix='decoder',
+    proj1 = get_layer(options['decoder'])[1](tparams, emb, options,
+                                            prefix='decoder_1st',
                                             mask=y_mask, context=ctx,
                                             context_mask=x_mask,
                                             one_step=False,
                                             init_state=init_state)
+    proj2 = get_layer(options['decoder'])[1](tparams, proj1[0], options,
+                                            prefix='decoder_2nd',
+                                            mask=y_mask, context=ctx,
+                                            context_mask=x_mask,
+                                            one_step=False,
+                                            init_state=init_state)
+    proj3 = get_layer(options['decoder'])[1](tparams, proj2[0], options,
+                                            prefix='decoder_3rd',
+                                            mask=y_mask, context=ctx,
+                                            context_mask=x_mask,
+                                            one_step=False,
+                                            init_state=init_state)
+    proj4 = get_layer(options['decoder'])[1](tparams, proj3[0], options,
+                                            prefix='decoder_4th',
+                                            mask=y_mask, context=ctx,
+                                            context_mask=x_mask,
+                                            one_step=False,
+                                            init_state=init_state)
+
     # hidden states of the decoder gru
-    proj_h = proj[0]
+    proj_h = proj4[0]
 
     # weighted averages of context, generated by attention module
-    ctxs = proj[1]
+    ctxs = proj4[1]
 
     # weights (alignment matrix)
-    opt_ret['dec_alphas'] = proj[2]
+    opt_ret['dec_alphas'] = proj4[2]
 
     # compute word probabilities
     logit_lstm = get_layer('ff')[1](tparams, proj_h, options,
@@ -673,13 +756,25 @@ def build_sampler(tparams, options, trng, use_noise):
     embr = embr.reshape([n_timesteps, n_samples, options['dim_word']])
 
     # encoder
-    proj = get_layer(options['encoder'])[1](tparams, emb, options,
-                                            prefix='encoder')
-    projr = get_layer(options['encoder'])[1](tparams, embr, options,
-                                             prefix='encoder_r')
+    proj1 = get_layer(options['encoder'])[1](tparams, emb, options,
+                                            prefix='encoder_1st')
+    proj2 = get_layer(options['encoder'])[1](tparams, proj1[0], options,
+                                            prefix='encoder_2nd')
+    proj3 = get_layer(options['encoder'])[1](tparams, proj2[0], options,
+                                            prefix='encoder_3rd')
+    proj4 = get_layer(options['encoder'])[1](tparams, proj3[0], options,
+                                            prefix='encoder_4th')
+    projr1 = get_layer(options['encoder'])[1](tparams, embr, options,
+                                             prefix='encoder_r_1st')
+    projr2 = get_layer(options['encoder'])[1](tparams, projr1[0], options,
+                                             prefix='encoder_r_2nd')
+    projr3 = get_layer(options['encoder'])[1](tparams, projr2[0], options,
+                                             prefix='encoder_r_3rd')
+    projr4 = get_layer(options['encoder'])[1](tparams, projr3[0], options,
+                                             prefix='encoder_r_4th')
 
     # concatenate forward and backward rnn hidden states
-    ctx = concatenate([proj[0], projr[0][::-1]], axis=proj[0].ndim-1)
+    ctx = concatenate([proj4[0], projr4[0][::-1]], axis=proj4[0].ndim-1)
 
     # get the input for decoder rnn initializer mlp
     ctx_mean = ctx.mean(0)
@@ -702,16 +797,32 @@ def build_sampler(tparams, options, trng, use_noise):
                         tparams['Wemb_dec'][y])
 
     # apply one step of conditional gru with attention
-    proj = get_layer(options['decoder'])[1](tparams, emb, options,
-                                            prefix='decoder',
+    proj1 = get_layer(options['decoder'])[1](tparams, emb, options,
+                                            prefix='decoder_1st',
                                             mask=None, context=ctx,
                                             one_step=True,
                                             init_state=init_state)
+    proj2 = get_layer(options['decoder'])[1](tparams, proj1[0], options,
+                                        prefix='decoder_2nd',
+                                        mask=None, context=ctx,
+                                        one_step=True,
+                                        init_state=init_state)
+    proj3 = get_layer(options['decoder'])[1](tparams, proj2[0], options,
+                                        prefix='decoder_3rd',
+                                        mask=None, context=ctx,
+                                        one_step=True,
+                                        init_state=init_state)
+    proj4 = get_layer(options['decoder'])[1](tparams, proj3[0], options,
+                                        prefix='decoder_4th',
+                                        mask=None, context=ctx,
+                                        one_step=True,
+                                        init_state=init_state)
+
     # get the next hidden state
-    next_state = proj[0]
+    next_state = proj4[0]
 
     # get the weighted averages of context for this target word y
-    ctxs = proj[1]
+    ctxs = proj4[1]
 
     logit_lstm = get_layer('ff')[1](tparams, next_state, options,
                                     prefix='ff_logit_lstm', activ='linear')
